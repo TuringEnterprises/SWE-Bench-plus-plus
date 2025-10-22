@@ -327,12 +327,31 @@ def get_repo_file(repo, commit, filepath):
         return None
 
 
+def safe_patch_set(patch: str) -> PatchSet:
+    """
+    Safely create a PatchSet, with fallback to handle malformed patches.
+
+    First tries to parse the patch as-is. If that fails due to formatting issues,
+    applies cleanup (removing extra blank lines) and tries again.
+
+    This ensures we don't modify patches that already work correctly.
+    """
+    try:
+        # Try parsing the patch as-is first
+        return PatchSet(patch)
+    except Exception:
+        # If parsing fails, try cleaning up extra newlines
+        # Some patches have multiple consecutive blank lines that cause parse errors
+        cleaned_patch = re.sub(r'\n{2,}', '\n', patch)
+        return PatchSet(cleaned_patch)
+
+
 def get_modified_files(patch: str) -> list[str]:
     """
     Get the list of modified files in a patch
     """
     source_files = []
-    for file in PatchSet(patch):
+    for file in safe_patch_set(patch):
         if file.source_file != "/dev/null":
             source_files.append(file.source_file)
     source_files = [x[2:] for x in source_files if x.startswith("a/")]
