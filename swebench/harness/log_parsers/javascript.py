@@ -326,7 +326,7 @@ def parse_log_jest(log: str) -> dict[str, str]:
     """
     test_status_map = {}
 
-    pattern = r"^\s*(✓|✕|○)\s(.+?)(?:\s\((\d+\s*m?s)\))?$"
+    pattern = r"^\s*(✓|✕|○)\s(.+?)(?:\s+\((\d+\s*m?s)\))?$"  # \s+ to handle variable whitespace before timing
 
     for line in log.split("\n"):
         match = re.match(pattern, line.strip())
@@ -368,7 +368,7 @@ def parse_log_vitest(log: str) -> dict[str, str]:
     """
     test_status_map = {}
 
-    pattern = r"^\s*(✓|×|↓)\s(.+?)(?:\s(\d+\s*m?s?|\[skipped\]))?$"
+    pattern = r"^\s*(✓|×|↓)\s(.+?)(?:\s+(\d+\s*m?s?|\[skipped\]))?$"  # \s+ to handle variable whitespace before timing
 
     for line in log.split("\n"):
         match = re.match(pattern, line.strip())

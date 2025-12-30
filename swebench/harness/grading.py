@@ -17,14 +17,23 @@ from swebench.harness.constants import (
     TESTS_TIMEOUT,
     LOG_TEST_BEFORE_OUTPUT,
     LOG_TEST_BASE_OUTPUT,
-    LANGUAGES_STR_MAP,
+    RUN_EVALUATION_LOG_DIR,
+    LOG_INSTANCE,
+    LOG_REPORT,
     KEY_MODEL,
     EvalType,
     ResolvedStatus,
     TestStatus,
 )
+from swebench.harness.utils import (
+    EvaluationError
+)
+from swebench.harness.docker_build import (
+    setup_logger,
+    close_logger
+)
 from swebench.harness.test_spec.test_spec import TestSpec
-from swebench.harness.log_parsers import MAP_REPO_TO_PARSER, LANGUAGE_PARSER_MAP
+from swebench.harness.log_parsers import MAP_REPO_TO_PARSER
 import json
 
 
@@ -34,7 +43,7 @@ def test_passed(case: str, sm: dict[str, str]) -> bool:
 
 
 def test_failed(case: str, sm: dict[str, str]) -> bool:
-    return case not in sm or sm[case] in [TestStatus.FAILED.value, TestStatus.ERROR.value]
+    return case not in sm or sm[case] in [TestStatus.FAILED.value, TestStatus.ERROR.value, TestStatus.SKIPPED.value]
 
 
 # MARK: Evaluation report functions
@@ -53,23 +62,20 @@ def get_logs_eval(test_spec: TestSpec, log_fp: str) -> tuple[dict[str, str], boo
     repo = test_spec.repo
     version = test_spec.version
 
-    if test_spec.environment_config:
-        log_parser_name = test_spec.environment_config.get("log_parser_name")
-        
-        language = next((k for k, v in LANGUAGES_STR_MAP.items() if v == test_spec.language), "")
-
-        parser = LANGUAGE_PARSER_MAP[language](log_parser_name)
+    # Get parser from test_spec if available, otherwise fall back to global map
+    if hasattr(test_spec, 'log_parser') and test_spec.log_parser is not None:
+        parser_or_code = test_spec.log_parser
     else:
-        parser = MAP_REPO_TO_PARSER.get(repo, MAP_REPO_TO_PARSER.get("default"))
+        # Fallback for backward compatibility
+        parser_or_code = MAP_REPO_TO_PARSER.get(repo, MAP_REPO_TO_PARSER.get("default"))
 
-
-    if type(parser) == str:
+    if type(parser_or_code) == str:
         namespace = {}
-        exec(parser, {}, namespace)
+        exec(parser_or_code, {}, namespace)
         log_parser = namespace["parse_log_to_json"]
     else:
-        log_parser = parser
-    test_cmd = MAP_REPO_VERSION_TO_SPECS.get(repo, {}).get(version, {}).get("test_cmd") or test_spec.environment_config.get("test_cmd")
+        log_parser = parser_or_code
+    test_cmd = MAP_REPO_VERSION_TO_SPECS[repo][version]["test_cmd"]
     if isinstance(test_cmd, list):
         test_cmd = test_cmd[-1]
 
@@ -238,6 +244,64 @@ def get_resolution_status(report: dict[str, dict[str, Any]]) -> str:
     else:
         return ResolvedStatus.NO.value
 
+def create_error_report(
+    report_path,
+    test_spec: TestSpec,
+    prediction: dict,
+    patch_successfully_applied: bool = False,
+    status: str = "",
+) -> dict:
+    """
+    Create and write an error report when evaluation cannot complete.
+    All F2P and P2P tests are marked as failures.
+
+    Args:
+        report_path: Path to write the report JSON file
+        test_spec: TestSpec instance containing test information
+        prediction: Prediction dict with model_patch and instance_id
+        patch_successfully_applied: Whether the patch was successfully applied
+        status: Error status string (e.g., "EMPTY_PATCH", "SYSTEM_ERROR")
+
+    Returns:
+        dict: The generated report dictionary
+    """
+    instance_id = test_spec.instance_id
+    patch = prediction.get(KEY_PREDICTION)
+    if not status:
+        if patch is None:
+            status = "SYSTEM_ERROR"
+        elif patch.strip() == "":
+            status = "EMPTY_PATCH"
+        else:
+            status = "UNSOLVED"  # Generic fallback for other error cases
+    report = {
+        instance_id: {
+            "patch_is_None": patch is None,
+            "patch_exists": patch is not None,
+            "patch_successfully_applied": patch_successfully_applied,
+            "resolved": False,
+            "status": status,
+            "tests_status": {
+                FAIL_TO_PASS: {
+                    "success": [],
+                    "failure": test_spec.FAIL_TO_PASS or []
+                },
+                PASS_TO_PASS: {
+                    "success": [],
+                    "failure": test_spec.PASS_TO_PASS or []
+                },
+                FAIL_TO_FAIL: {"success": [], "failure": []},
+                PASS_TO_FAIL: {"success": [], "failure": []},
+            }
+        }
+    }
+
+    # Write report to file
+    with open(report_path, "w") as f:
+        f.write(json.dumps(report, indent=4))
+
+    return report
+
 
 def get_eval_report(
     test_spec: TestSpec,
@@ -294,8 +358,13 @@ def get_eval_report(
 
     if not after_found:
         # Patch existed but failed to be applied or tests could not run
-        report_map[instance_id]["status"] = "ERROR_PATCH"
-        return report_map
+        log_dir = RUN_EVALUATION_LOG_DIR / run_id / model_name_or_path / instance_id
+        log_file = log_dir / LOG_INSTANCE
+        report_path = log_dir / LOG_REPORT
+        logger = setup_logger(instance_id, log_file)
+        create_error_report(report_path, test_spec, prediction, patch_successfully_applied=True, status="TEST_ERROR")
+        raise EvaluationError(instance_id, "Patch is null or empty", logger)
+
 
     report_map[instance_id]["patch_successfully_applied"] = True
 

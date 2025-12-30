@@ -59,8 +59,9 @@ def make_eval_script_list_rust(
         apply_test_patch_command,
         *build_commands,
         f": '{START_TEST_OUTPUT}'",
-        test_commands,
-        f": '{END_TEST_OUTPUT}'",
+        # Run test_commands in a subshell to prevent 'exit' from terminating the main script
+        f"({test_commands})",
+        f"set +x; echo '{END_TEST_OUTPUT}'",
         reset_tests_command,
     ]
 

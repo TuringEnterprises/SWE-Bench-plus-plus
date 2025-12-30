@@ -36,8 +36,15 @@ def make_repo_script_list_common(
         f"git clone -o origin https://github.com/{repo} {repo_directory}",
         f"chmod -R 777 {repo_directory}",  # So nonroot user can run tests
         f"cd {repo_directory}",
+        f"git fetch origin {base_commit}",
         f"git reset --hard {base_commit}",
-        "git remote remove origin",  # Remove the remote so the agent won't see newer commits
+        # Remove the remote so the agent won't see newer commits.
+        "git remote remove origin",
+        # Remove only tags pointing to commits after target timestamp
+        f"TARGET_TIMESTAMP=$(git show -s --format=%ci {base_commit})",
+        'git tag -l | while read tag; do TAG_COMMIT=$(git rev-list -n 1 "$tag"); TAG_TIME=$(git show -s --format=%ci "$TAG_COMMIT"); if [[ "$TAG_TIME" > "$TARGET_TIMESTAMP" ]]; then git tag -d "$tag"; fi; done',
+        "git reflog expire --expire=now --all",
+        "git gc --prune=now --aggressive"
     ]
     if "pre_install" in specs:
         setup_commands.extend(specs["pre_install"])
@@ -95,7 +102,7 @@ def make_eval_script_list_common(
         *build_commands,
         f": '{START_TEST_OUTPUT}'",
         *test_commands,
-        f": '{END_TEST_OUTPUT}'",
+        f"set +x; echo '{END_TEST_OUTPUT}'",
         reset_tests_command,
     ]
     return eval_commands

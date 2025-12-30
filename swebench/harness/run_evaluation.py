@@ -52,7 +52,7 @@ from swebench.harness.docker_build import (
     close_logger,
     setup_logger,
 )
-from swebench.harness.grading import get_eval_report
+from swebench.harness.grading import create_error_report, get_eval_report
 from swebench.harness.reporting import make_run_report
 from swebench.harness.test_spec.test_spec import make_test_spec, TestSpec
 from swebench.harness.utils import (
@@ -224,6 +224,81 @@ def replace_git_apply_block(script_content: str, new_content: str) -> str:
 
     return ''.join(result)
 
+def run_instance_with_retry(
+    test_spec: TestSpec,
+    pred: dict,
+    rm_image: bool,
+    force_rebuild: bool,
+    client: docker.DockerClient,
+    run_id: str,
+    timeout: int | None = None,
+    rewrite_reports: bool = False,
+    max_retries: int = 3,
+):
+    """
+    Run a single instance with the given prediction, with retry logic for failures.
+
+    Args:
+        test_spec (TestSpec): TestSpec instance
+        pred (dict): Prediction w/ model_name_or_path, model_patch, instance_id
+        rm_image (bool): Whether to remove the image after running
+        force_rebuild (bool): Whether to force rebuild the image
+        client (docker.DockerClient): Docker client
+        run_id (str): Run ID
+        timeout (int): Timeout for running tests
+        rewrite_reports (bool): True if eval run is just to reformat existing report
+        max_retries (int): Maximum number of retry attempts (default: 3)
+
+    Returns:
+        tuple: (instance_id, report) on success, or None on failure after all retries
+    """
+    instance_id = test_spec.instance_id
+    model_name_or_path = pred.get(KEY_MODEL, "None").replace("/", "__")
+    log_dir = RUN_EVALUATION_LOG_DIR / run_id / model_name_or_path / instance_id
+    report_path = log_dir / LOG_REPORT
+
+    for attempt in range(max_retries):
+        if attempt > 0:
+            print(f"Retrying {instance_id} (attempt {attempt + 1}/{max_retries})...")
+            # Delete the existing report file before retrying to ensure a fresh run
+            if report_path.exists():
+                report_path.unlink()
+
+        result = run_instance(
+            test_spec=test_spec,
+            pred=pred,
+            rm_image=rm_image,
+            force_rebuild=force_rebuild,
+            client=client,
+            run_id=run_id,
+            timeout=timeout,
+            rewrite_reports=rewrite_reports,
+        )
+
+        # Check if the result is successful
+        if result is not None:
+            instance_id_result, report = result
+            # Check if the instance is resolved
+            if report.get(instance_id_result, {}).get("resolved", False):
+                if attempt > 0:
+                    print(f"Successfully resolved {instance_id} on attempt {attempt + 1}")
+                return result
+            else:
+                # Instance not resolved, retry if we have attempts left
+                if attempt < max_retries - 1:
+                    print(f"Instance {instance_id} not resolved, will retry...")
+                else:
+                    print(f"Instance {instance_id} not resolved after {max_retries} attempts")
+                    return result  # Return the last result even if not resolved
+        else:
+            # Result is None (error occurred), retry if we have attempts left
+            if attempt < max_retries - 1:
+                print(f"Instance {instance_id} encountered error, will retry...")
+            else:
+                print(f"Instance {instance_id} failed after {max_retries} attempts")
+                return None
+
+    return None
 
 def run_instance(
     test_spec: TestSpec,
@@ -340,6 +415,8 @@ def run_instance(
                 logger.info(f"Failed to apply patch to container (attempt {i+1}/{len(GIT_APPLY_CMDS)}): {git_apply_cmd}")
         if not applied_patch:
             logger.info(f"{APPLY_PATCH_FAIL}:\n{val.output.decode(UTF8)}")
+            # Write error report before raising exception
+            create_error_report(report_path, test_spec, pred, status="APPLY_PATCH_FAILED")
             raise EvaluationError(
                 instance_id,
                 f"{APPLY_PATCH_FAIL}:\n{val.output.decode(UTF8)}",
@@ -450,6 +527,12 @@ def run_instance(
     # Run the instance
     container = None
     try:
+
+        # Check for a null/empty patch
+        if pred[KEY_PREDICTION] is None or not pred[KEY_PREDICTION].strip():
+            create_error_report(report_path, test_spec, pred, status="EMPTY_PATCH")
+            raise EvaluationError(instance_id, "Patch is null or empty", logger)
+
         # Build + start instance container (instance image should already be built)
         container = build_container(
             test_spec, client, run_id, logger, rm_image, force_rebuild
@@ -532,6 +615,7 @@ def run_instances(
     namespace: str = "swebench",
     instance_image_tag: str = "latest",
     rewrite_reports: bool = False,
+    max_retries: int = 3,
 ):
     """
     Run all instances for the given predictions in parallel.
@@ -545,6 +629,7 @@ def run_instances(
         max_workers (int): Maximum number of workers
         run_id (str): Run ID
         timeout (int): Timeout for running tests
+        max_retries (int): Maximum number of retry attempts for failed instances
     """
     client = docker.from_env()
     test_specs = list(
@@ -587,12 +672,13 @@ def run_instances(
                 run_id,
                 timeout,
                 rewrite_reports,
+                max_retries,
             )
         )
 
     # run instances in parallel
     print(f"Running {len(instances)} instances...")
-    run_threadpool(run_instance, payloads, max_workers)
+    run_threadpool(run_instance_with_retry, payloads, max_workers)
     print("All instances run.")
 
 
@@ -680,18 +766,11 @@ def get_dataset_from_preds(
         print(f"{len(completed_ids)} instances already run, skipping...")
         dataset = [i for i in dataset if i[KEY_INSTANCE_ID] not in completed_ids]
 
-    empty_patch_ids = {
-        k
-        for k, v in predictions.items()
-        if v[KEY_PREDICTION] == "" or v[KEY_PREDICTION] is None
-    }
-
     # filter dataset to only instances with predictions
     dataset = [
         i
         for i in dataset
         if i[KEY_INSTANCE_ID] in prediction_ids
-        and i[KEY_INSTANCE_ID] not in empty_patch_ids
     ]
     return dataset
 
@@ -712,7 +791,8 @@ def main(
     rewrite_reports: bool,
     instance_image_tag: str = "latest",
     report_dir: str = ".",
-    turing_eval: bool = False
+    turing_eval: bool = False,
+    max_retries: int = 3,
 ):
     """
     Run evaluation harness for the given dataset and predictions.
@@ -763,6 +843,7 @@ def main(
             namespace=namespace,
             instance_image_tag=instance_image_tag,
             rewrite_reports=rewrite_reports,
+            max_retries=max_retries,
         )
 
     # clean images + make final report
@@ -852,6 +933,12 @@ if __name__ == "__main__":
         "--report_dir", type=str, default=".", help="Directory to write reports to"
     )
 
+    parser.add_argument(
+        "--max_retries",
+        type=int,
+        default=3,
+        help="Maximum number of retry attempts for failed or unresolved evaluations"
+    )
     parser.add_argument('--turing_eval', action='store_true', help=argparse.SUPPRESS)
 
     args = parser.parse_args()

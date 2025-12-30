@@ -177,7 +177,7 @@ def get_ext_from_language(language: str) -> str:
 dataset_path = get_cli_arg("--dataset_name")
 dataset = []
 
-if dataset_path and dataset_path.endswith(".json") and dataset_path.endswith(".jsonl"):
+if dataset_path and (dataset_path.endswith(".json") or dataset_path.endswith(".jsonl")):
     if dataset_path.endswith(".json"):
         dataset = json.loads(Path(dataset_path).read_text())
         if type(dataset)!=list:

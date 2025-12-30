@@ -167,7 +167,10 @@ def parse_log_pytest_v2(log: str) -> dict[str, str]:
             test_case = line.split()
             if len(test_case) >= 2:
                 test_status_map[test_case[0]] = test_case[1]
-    return test_status_map
+    
+    progress_pattern = re.compile(r"^\[\s*\d+%]$")  # e.g. "[ 2%]" or "[98%]"
+    cleaned = {k: v for k, v in test_status_map.items() if not progress_pattern.match(k)}
+    return cleaned
 
 
 def parse_log_seaborn(log: str) -> dict[str, str]:

@@ -174,9 +174,15 @@ def make_repo_script_list_py(
         f"git clone -o origin https://github.com/{repo} {repo_directory}",
         f"chmod -R 777 {repo_directory}",  # So nonroot user can run tests
         f"cd {repo_directory}",
+        f"git fetch origin {base_commit}",
         f"git reset --hard {base_commit}",
         # Remove the remote so the agent won't see newer commits.
         "git remote remove origin",
+        # Remove only tags pointing to commits after target timestamp
+        f"TARGET_TIMESTAMP=$(git show -s --format=%ci {base_commit})",
+        'git tag -l | while read tag; do TAG_COMMIT=$(git rev-list -n 1 "$tag"); TAG_TIME=$(git show -s --format=%ci "$TAG_COMMIT"); if [[ "$TAG_TIME" > "$TARGET_TIMESTAMP" ]]; then git tag -d "$tag"; fi; done',
+        "git reflog expire --expire=now --all",
+        "git gc --prune=now --aggressive",
         # Make sure conda is available for later use
         "source /opt/miniconda3/bin/activate",
         f"conda activate {env_name}",
@@ -196,9 +202,9 @@ def make_repo_script_list_py(
                 setup_commands.append(install)
         else:
             setup_commands.append(specs["install"])
-            
 
-    # If the setup modifies the repository in any way, it can be 
+
+    # If the setup modifies the repository in any way, it can be
     # difficult to get a clean diff.  This ensures that `git diff`
     # will only reflect the changes from the user while retaining the
     # original state of the repository plus setup commands.
@@ -291,7 +297,7 @@ def make_eval_script_list_py(
     # Reset test files to the state they should be in before the patch.
     reset_tests_command = f"git checkout {base_commit} {' '.join(test_files)}"
     apply_test_patch_command = (
-        f"git apply -v - <<'{HEREDOC_DELIMITER}'\n{test_patch}\n{HEREDOC_DELIMITER}"
+        f"git apply --verbose --reject - <<'{HEREDOC_DELIMITER}'\n{test_patch}\n{HEREDOC_DELIMITER}"
     )
     base_cmd = specs.get("test_cmd")
     no_test_directives = specs.get("no_test_directives", False)
@@ -323,18 +329,18 @@ def make_eval_script_list_py(
                 eval_commands.append(install)
         else:
             eval_commands.append(specs["install"])
-    
+
     build_commands = []
     if "build" in specs:
         build_commands.extend(specs["build"])
-    
+
     eval_commands += [
         reset_tests_command,
         apply_test_patch_command,
         *build_commands,
         f": '{START_TEST_OUTPUT}'",
-        test_command,
-        f": '{END_TEST_OUTPUT}'",
+        f"({test_command})",
+        f"set +x; echo '{END_TEST_OUTPUT}'",
         reset_tests_command,  # Revert tests after done, leave the repo in the same state as before
     ]
     return eval_commands

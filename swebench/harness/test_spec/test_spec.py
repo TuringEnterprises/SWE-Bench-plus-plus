@@ -1,6 +1,7 @@
 import hashlib
 import json
 import platform
+import os
 
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union, cast
@@ -44,6 +45,7 @@ class TestSpec:
     language: str
     docker_specs: dict
     namespace: Optional[str]
+    log_parser: Optional[Any] = None
     base_image_tag: str = LATEST
     env_image_tag: str = LATEST
     instance_image_tag: str = LATEST
@@ -84,7 +86,7 @@ class TestSpec:
         """
         ext = MAP_REPO_TO_EXT.get(self.repo)
         if not ext:
-            ext = get_ext_from_language(self.language)
+            ext = self.language
 
         if self.docker_specs != {}:
             hash_key = str(self.docker_specs)
@@ -248,6 +250,7 @@ def make_test_spec(
     ext = MAP_REPO_TO_EXT.get(repo)
     if not ext:
         ext = get_ext_from_language(instance["language"])
+    
 
     if not arch:
         if platform.machine() in {"aarch64", "arm64"}:
@@ -256,6 +259,35 @@ def make_test_spec(
         else:
             arch = "x86_64"
 
+    # Extract log parser from specs (which is the spec_dict from MAP_REPO_VERSION_TO_SPECS)
+    log_parser = None
+    log_parser_name = specs.get("log_parser_name", "")
+
+    if log_parser_name:
+        from swebench.harness.log_parsers import LANGUAGE_PARSER_MAP
+        from swebench.harness.constants import LANGUAGES_STR_MAP
+
+        # Get the language constant from the repo's extension
+        # MAP_REPO_TO_EXT[repo] gives us the extension (e.g., "py")
+        # We need to reverse-lookup to get the language constant (e.g., "Python")
+        repo_ext = MAP_REPO_TO_EXT.get(repo)
+        if not ext:
+            repo_ext = get_ext_from_language(instance["language"])
+        language_constant = None
+        for lang_const, lang_ext in LANGUAGES_STR_MAP.items():
+            if lang_ext == repo_ext:
+                language_constant = lang_const
+                break
+
+        if language_constant:
+            if log_parser_name == "custom":
+                log_parser = specs.get("log_parser_code")
+                if not log_parser:
+                    # If no custom code provided, fall back to language default
+                    log_parser = LANGUAGE_PARSER_MAP[language_constant](log_parser_name)
+            else:
+                # Use the language-specific parser by name
+                log_parser = LANGUAGE_PARSER_MAP[language_constant](log_parser_name)
     return TestSpec(
         instance=instance,
         instance_id=instance_id,
@@ -270,6 +302,7 @@ def make_test_spec(
         language=ext,
         docker_specs=docker_specs,
         namespace=namespace,
+        log_parser=log_parser,
         base_image_tag=base_image_tag,
         env_image_tag=env_image_tag,
         instance_image_tag=instance_image_tag,

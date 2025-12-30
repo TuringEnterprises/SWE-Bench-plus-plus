@@ -54,7 +54,7 @@ def make_run_report(
         prediction = predictions[instance_id]
         if prediction.get(KEY_PREDICTION, None) in ["", None]:
             empty_patch_ids.add(instance_id)
-            continue
+            # Don't skip - null/empty patches now get reports too
         report_file = (
             RUN_EVALUATION_LOG_DIR
             / run_id
