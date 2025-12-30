@@ -312,8 +312,43 @@ def parse_log_tap(log: str) -> dict[str, str]:
     # Fallback to ctest log parser
     return parse_log_ctest(log)
 
+def parse_log_common(log: str) -> dict[str, str]:
+    """
+    Try all parsers and return if only one parser returns results or all result is the same.
+    """
+    parsers = [
+        parse_log_googletest,
+        parse_log_doctest,
+        parse_log_catch2,
+        parse_log_tap,
+        parse_log_ctest,
+    ]
+    results = {}
+    for parser in parsers:
+        result = parser(log)
+        print(f"Parser {parser.__name__} returned {len(result)} results.")
+        print(result)
+        if result:
+            results[parser.__name__] = result
+
+    if len(results) == 1:
+        return list(results.values())[0]
+    # Check if all results are the same
+    first_result = None
+    for result in results.values():
+        print(f"Comparing result: {result}")
+        print(first_result)
+        print(f"Is equal: {result == first_result}")
+        if first_result is None:
+            first_result = result
+        elif result != first_result:
+            return {}
+    return first_result if first_result is not None else {}
+
 
 def get_c_parser_by_name(name: str):
+    if name == "non_agentic":
+        return parse_log_common
     if name == "googletest":
         return parse_log_googletest
     if name == "doctest":

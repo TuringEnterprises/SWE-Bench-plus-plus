@@ -1,4 +1,4 @@
-__version__ = "1.0.0"
+__version__ = "7.0.0"
 
 from swebench.harness.constants import (
     KEY_INSTANCE_ID,
