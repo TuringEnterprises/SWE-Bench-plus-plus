@@ -75,7 +75,7 @@ def get_logs_eval(test_spec: TestSpec, log_fp: str) -> tuple[dict[str, str], boo
         log_parser = namespace["parse_log_to_json"]
     else:
         log_parser = parser_or_code
-    test_cmd = MAP_REPO_VERSION_TO_SPECS[repo][version]["test_cmd"]
+    test_cmd = test_spec.environment_config["test_cmd"]
     if isinstance(test_cmd, list):
         test_cmd = test_cmd[-1]
 

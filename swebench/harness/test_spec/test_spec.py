@@ -270,12 +270,9 @@ def make_test_spec(
         # Get the language constant from the repo's extension
         # MAP_REPO_TO_EXT[repo] gives us the extension (e.g., "py")
         # We need to reverse-lookup to get the language constant (e.g., "Python")
-        repo_ext = MAP_REPO_TO_EXT.get(repo)
-        if not ext:
-            repo_ext = get_ext_from_language(instance["language"])
         language_constant = None
         for lang_const, lang_ext in LANGUAGES_STR_MAP.items():
-            if lang_ext == repo_ext:
+            if lang_ext == ext:
                 language_constant = lang_const
                 break
 
@@ -306,5 +303,5 @@ def make_test_spec(
         base_image_tag=base_image_tag,
         env_image_tag=env_image_tag,
         instance_image_tag=instance_image_tag,
-        environment_config=environment_config
+        environment_config=specs
     )
