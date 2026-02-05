@@ -17,8 +17,10 @@ def to_json(value: str) -> dict:
         import ast
         return ast.literal_eval(value)
 
-def get_test_cmds(instance) -> list:
-    test_cmd = MAP_REPO_VERSION_TO_SPECS.get(instance["repo"], {}).get(instance["version"], {}).get("test_cmd") or to_json(instance.get("environment_config", {})).get("test_cmd")
+def get_test_cmds(specs) -> list:
+    test_cmd = specs[
+        "test_cmd"
+    ]
     return [test_cmd] if isinstance(test_cmd, str) else test_cmd
 
 
@@ -88,7 +90,7 @@ def make_eval_script_list_common(
         build_commands.extend(specs["build"])
 
     apply_test_patch_command = f"git apply --verbose --reject - <<'{HEREDOC_DELIMITER}'\n{test_patch}\n{HEREDOC_DELIMITER}"
-    test_commands = get_test_cmds(instance)
+    test_commands = get_test_cmds(specs)
     eval_commands = [
         f"cd {repo_directory}",
         f"git config --global --add safe.directory {repo_directory}",  # for nonroot user
